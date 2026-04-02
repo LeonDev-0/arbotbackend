@@ -1,0 +1,50 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+
+// Clientes reales — pueden tener hasta 3 cuentas
+model Cliente {
+  id         Int             @id @default(autoincrement())
+  telefono   String          @unique   // número en formato JID: 59170000000@s.whatsapp.net
+  creadoEn   DateTime        @default(now())
+  cuentas    CuentaCliente[]
+}
+model NumeroBienvenido {
+  id           Int      @id @default(autoincrement())
+  telefono     String   @unique
+  bienvenidoEn DateTime @default(now())
+}
+// Hasta 3 cuentas por cliente
+model CuentaCliente {
+  id         Int      @id @default(autoincrement())
+  clienteId  Int
+  usuario    String
+  contrasena String
+  cliente    Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+}
+
+// Cuentas demo disponibles (se agregan manualmente)
+model CuentaDemo {
+  id         Int      @id @default(autoincrement())
+  usuario    String
+  contrasena String
+  disponible Boolean  @default(true)
+  creadoEn   DateTime @default(now())
+}
+
+// Registro de demos entregadas (números que ya pidieron demo)
+model SesionDemo {
+  id          Int      @id @default(autoincrement())
+  telefono    String   @unique
+  cuentaId    Int                // id de la CuentaDemo entregada
+  entregadoEn DateTime @default(now())
+}
