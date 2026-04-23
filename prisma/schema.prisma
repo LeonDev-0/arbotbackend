@@ -34,9 +34,11 @@ model Servicio {
   usuarioId  Int
   nombre     String
   color      String @default("#22c55e")
+  demosActivo      Boolean @default(true)
   msgDemoEntregada String?
   msgDemoYaTiene   String?
   msgDemoSinStock  String?
+  msgDemoDesactivado String?
 
   usuario        Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
   dispositivos   Dispositivo[]

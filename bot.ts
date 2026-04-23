@@ -277,6 +277,14 @@ async function manejarDemo(
   const servicio = dispositivo.servicio
   const { pais } = detectarPais(jid)
 
+  // Demos desactivadas para este servicio
+  if (!servicio.demosActivo) {
+    const texto = servicio.msgDemoDesactivado?.trim()
+      || `⛔ Las demos de *${servicio.nombre}* no están disponibles en este momento.\n\nContáctanos para más información.`
+    await sock.sendMessage(jid, { text: texto })
+    return
+  }
+
   const vars = (tpl: string, u: string, c: string) =>
     tpl.replace(/\{usuario\}/g, u).replace(/\{contrasena\}/g, c).replace(/\{servicio\}/g, servicio.nombre)
 
