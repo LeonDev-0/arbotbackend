@@ -1,5 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
   provider = "prisma-client"
@@ -10,41 +8,145 @@ datasource db {
   provider = "sqlite"
 }
 
+// ─── Usuarios del sistema ────────────────────────────────────────────────────
+model Usuario {
+  id          Int       @id @default(autoincrement())
+  username    String    @unique
+  password    String    // bcrypt hash
+  rol         String    @default("cliente")  // "admin" | "cliente"
+  activo      Boolean   @default(true)
+  // Expiración de la cuenta (null = sin límite, solo admin tiene null)
+  expiraEn    DateTime?
+  creadoEn    DateTime  @default(now())
 
-// Clientes reales — pueden tener hasta 3 cuentas
-model Cliente {
-  id         Int             @id @default(autoincrement())
-  telefono   String          @unique   // número en formato JID: 59170000000@s.whatsapp.net
-  creadoEn   DateTime        @default(now())
-  cuentas    CuentaCliente[]
+  // Relaciones propias de cada cliente
+  dispositivos      Dispositivo[]
+  servicios         Servicio[]
+  cuentasCliente    CuentaCliente[]
+  demos             CuentaDemo[]
+  clientesDemo      ClienteDemo[]
+  plantillasMsg     PlantillaRecordatorio[]
 }
-model NumeroBienvenido {
-  id           Int      @id @default(autoincrement())
-  telefono     String   @unique
-  bienvenidoEn DateTime @default(now())
+
+// ─── Servicios (por usuario) ─────────────────────────────────────────────────
+model Servicio {
+  id         Int    @id @default(autoincrement())
+  usuarioId  Int
+  nombre     String
+  color      String @default("#22c55e")
+  msgDemoEntregada String?
+  msgDemoYaTiene   String?
+  msgDemoSinStock  String?
+
+  usuario        Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  dispositivos   Dispositivo[]
+  cuentasCliente CuentaCliente[]
+  demos          CuentaDemo[]
+  clientesDemo   ClienteDemo[]
+
+  @@unique([usuarioId, nombre])
 }
-// Hasta 3 cuentas por cliente
+
+// ─── Dispositivos WhatsApp (máx 2 por usuario) ───────────────────────────────
+model Dispositivo {
+  id         Int      @id @default(autoincrement())
+  usuarioId  Int
+  nombre     String
+  servicioId Int?
+  pais       String?
+  // "desconectado" | "pausado" | "esperando_qr" | "conectado"
+  estado     String   @default("desconectado")
+  telefono   String?
+  creadoEn   DateTime @default(now())
+
+  usuario  Usuario          @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  servicio Servicio?        @relation(fields: [servicioId], references: [id])
+  reglas   RespuestaRegla[]
+}
+
+// ─── Reglas y pasos de respuesta automática (por dispositivo) ────────────────
+model RespuestaRegla {
+  id            Int      @id @default(autoincrement())
+  dispositivoId Int
+  palabrasClave String
+  orden         Int      @default(0)
+  activo        Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+
+  dispositivo Dispositivo     @relation(fields: [dispositivoId], references: [id], onDelete: Cascade)
+  pasos       RespuestaPaso[]
+}
+
+model RespuestaPaso {
+  id        Int     @id @default(autoincrement())
+  reglaId   Int
+  orden     Int     @default(0)
+  tipo      String  @default("texto")   // "texto" | "imagen" | "video"
+  contenido String
+  caption   String?
+  delayMs   Int     @default(0)
+
+  regla RespuestaRegla @relation(fields: [reglaId], references: [id], onDelete: Cascade)
+}
+
+// ─── Plantillas de recordatorio (por usuario) ────────────────────────────────
+model PlantillaRecordatorio {
+  id        Int    @id @default(autoincrement())
+  usuarioId Int
+  nombre    String // "Cuenta expirada", "Próximo vencimiento", etc.
+  // "texto" | "imagen"
+  tipo      String @default("texto")
+  mensaje   String // texto con variables {usuario} {servicio} {pais}
+  imagenUrl String? // URL de imagen opcional
+  creadoEn  DateTime @default(now())
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+}
+
+// ─── Cuentas de clientes (estructura plana, 1 registro = 1 cuenta) ───────────
 model CuentaCliente {
   id         Int      @id @default(autoincrement())
-  clienteId  Int
+  usuarioId  Int
+  telefono   String
   usuario    String
   contrasena String
-  cliente    Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  servicioId Int
+  pais       String   @default("Bolivia")
+  notas      String?
+  creadoEn   DateTime @default(now())
+
+  usuarioRel Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  servicio   Servicio @relation(fields: [servicioId], references: [id])
 }
 
-// Cuentas demo disponibles (se agregan manualmente)
+// ─── Cuentas demo por servicio ───────────────────────────────────────────────
 model CuentaDemo {
   id         Int      @id @default(autoincrement())
+  usuarioId  Int
+  servicioId Int
   usuario    String
   contrasena String
   disponible Boolean  @default(true)
   creadoEn   DateTime @default(now())
+
+  usuarioRel Usuario      @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  servicio   Servicio     @relation(fields: [servicioId], references: [id])
+  sesiones   ClienteDemo[]
 }
 
-// Registro de demos entregadas (números que ya pidieron demo)
-model SesionDemo {
+// ─── Clientes que pidieron demo (registro automático del bot) ────────────────
+model ClienteDemo {
   id          Int      @id @default(autoincrement())
-  telefono    String   @unique
-  cuentaId    Int                // id de la CuentaDemo entregada
+  usuarioId   Int
+  telefono    String
+  nombre      String
+  cuentaId    Int
+  servicioId  Int
   entregadoEn DateTime @default(now())
+
+  usuarioRel Usuario    @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  cuenta     CuentaDemo @relation(fields: [cuentaId], references: [id])
+  servicio   Servicio   @relation(fields: [servicioId], references: [id])
+
+  @@unique([usuarioId, telefono, servicioId])
 }

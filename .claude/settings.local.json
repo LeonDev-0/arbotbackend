@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/Sandro/Desktop/mi-proyecto//**)",
+      "Read(//c/Users/Sandro/Desktop/mi-proyecto/**)",
+      "Bash(docker info *)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Auths:', list\\(d.get\\('auths',{}\\).keys\\(\\)\\)\\); print\\('CredsStore:', d.get\\('credsStore','none'\\)\\)\")",
+      "Bash(docker system *)",
+      "Bash(docker login *)"
+    ]
+  }
+}
