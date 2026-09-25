@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs"
 import { prisma } from "../lib/prisma"
 import { iniciarBots } from "../bot"
+import { iniciarRecordatorios } from "./recordatorios"
 import { PORT } from "./config"
 import app from "./app"
 
@@ -14,6 +15,7 @@ async function seedAdmin() {
 }
 
 iniciarBots()
+iniciarRecordatorios()
 
 app.listen(PORT, async () => {
   await seedAdmin()

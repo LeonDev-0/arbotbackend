@@ -2,45 +2,8 @@ import { Router } from "express"
 import { prisma } from "../../lib/prisma"
 import { auth } from "../middleware/auth"
 
-export const demosRouter = Router()
+// Demos entregadas por el bot (creadas en el panel IPTV)
 export const clientesDemoRouter = Router()
-
-// ── Cuentas demo ──────────────────────────────────────────────────────────────
-
-demosRouter.get("/", ...auth, async (req: any, res) => {
-  const { servicioId } = req.query
-  const where: any = { usuarioId: req.usuario.id }
-  if (servicioId) where.servicioId = Number(servicioId)
-  res.json(await prisma.cuentaDemo.findMany({ where, orderBy: { id: "desc" }, include: { servicio: true } }))
-})
-
-demosRouter.post("/", ...auth, async (req: any, res) => {
-  try {
-    const { servicioId, usuario, contrasena } = req.body
-    if (!servicioId || !usuario || !contrasena) return res.status(400).json({ error: "Faltan campos" })
-    res.json(await prisma.cuentaDemo.create({
-      data: { usuarioId: req.usuario.id, servicioId: Number(servicioId), usuario, contrasena, disponible: true },
-      include: { servicio: true },
-    }))
-  } catch { res.status(500).json({ error: "Error" }) }
-})
-
-demosRouter.put("/:id", ...auth, async (req, res) => {
-  try {
-    const { usuario, contrasena } = req.body
-    const data: any = {}
-    if (usuario) data.usuario = usuario
-    if (contrasena) data.contrasena = contrasena
-    res.json(await prisma.cuentaDemo.update({ where: { id: Number(req.params.id) }, data, include: { servicio: true } }))
-  } catch { res.status(500).json({ error: "Error" }) }
-})
-
-demosRouter.delete("/:id", ...auth, async (req, res) => {
-  await prisma.cuentaDemo.delete({ where: { id: Number(req.params.id) } })
-  res.json({ ok: true })
-})
-
-// ── Clientes demo (registrados por el bot) ────────────────────────────────────
 
 clientesDemoRouter.get("/", ...auth, async (req: any, res) => {
   const { servicioId, buscar } = req.query
@@ -57,7 +20,15 @@ clientesDemoRouter.get("/", ...auth, async (req: any, res) => {
   }))
 })
 
-clientesDemoRouter.delete("/:id", ...auth, async (req, res) => {
-  await prisma.clienteDemo.delete({ where: { id: Number(req.params.id) } })
+// Eliminar: borra la cuenta demo (el registro del cliente se borra en cascada) → puede pedir otra
+clientesDemoRouter.delete("/:id", ...auth, async (req: any, res) => {
+  const demo = await prisma.clienteDemo.findUnique({ where: { id: Number(req.params.id) } })
+  if (!demo || demo.usuarioId !== req.usuario.id) return res.status(404).json({ error: "Demo no encontrada" })
+  await prisma.cuentaDemo.delete({ where: { id: demo.cuentaId } })
   res.json({ ok: true })
+})
+
+clientesDemoRouter.delete("/", ...auth, async (req: any, res) => {
+  const { count } = await prisma.cuentaDemo.deleteMany({ where: { usuarioId: req.usuario.id } })
+  res.json({ ok: true, count })
 })

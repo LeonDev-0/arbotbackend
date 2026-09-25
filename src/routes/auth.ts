@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
 import { prisma } from "../../lib/prisma"
 import { JWT_SECRET } from "../config"
-import { authMiddleware } from "../middleware/auth"
+import { auth, authMiddleware } from "../middleware/auth"
 
 const router = Router()
 
@@ -28,6 +28,41 @@ router.post("/login", async (req, res) => {
 
 router.get("/me", authMiddleware, async (req: any, res) => {
   res.json(await prisma.usuario.findUnique({ where: { id: req.usuario.id }, select: USER_SELECT }))
+})
+
+const PANEL_SELECT = { panelUsuario: true, panelPassword: true }
+
+router.get("/panel-config", ...auth, async (req: any, res) => {
+  const u = await prisma.usuario.findUnique({ where: { id: req.usuario.id }, select: PANEL_SELECT })
+  res.json(u)
+})
+
+router.put("/panel-config", ...auth, async (req: any, res) => {
+  try {
+    const { panelUsuario, panelPassword } = req.body
+    const actual = await prisma.usuario.findUnique({
+      where: { id: req.usuario.id },
+      select: PANEL_SELECT,
+    })
+
+    const nuevoUsuario  = panelUsuario?.trim()  || null
+    const nuevaPassword = panelPassword?.trim() || null
+
+    const cambio = nuevoUsuario !== actual?.panelUsuario || nuevaPassword !== actual?.panelPassword
+
+    const u = await prisma.usuario.update({
+      where: { id: req.usuario.id },
+      data: { panelUsuario: nuevoUsuario, panelPassword: nuevaPassword },
+      select: PANEL_SELECT,
+    })
+
+    if (cambio) {
+      const { cerrarNavegador } = await import("../iptvservice")
+      await cerrarNavegador()
+    }
+
+    res.json(u)
+  } catch { res.status(500).json({ error: "Error al guardar" }) }
 })
 
 export default router

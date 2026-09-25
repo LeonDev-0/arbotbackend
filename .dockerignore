@@ -3,6 +3,19 @@ node_modules
 .gitignore
 *.md
 uploads
-dev.db
-*.db
 generated
+
+# Base de datos y copias (con datos reales de clientes)
+*.db
+*.db.*
+*.db-journal
+
+# Secretos: nunca dentro de la imagen (en Docker se pasan por environment)
+.env
+.env.*
+
+# Sesiones de WhatsApp (en Docker se montan como volumen) y pasarela de pagos con credenciales
+sesiones
+auth_*
+pasarela
+.claude

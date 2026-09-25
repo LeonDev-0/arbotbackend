@@ -8,7 +8,7 @@ const router = Router()
 // ── CRUD dispositivos ─────────────────────────────────────────────────────────
 
 router.get("/", ...auth, async (req: any, res) => {
-  const where = req.usuario.rol === "admin" ? {} : { usuarioId: req.usuario.id }
+  const where = { usuarioId: req.usuario.id }
   const devs = await prisma.dispositivo.findMany({ where, orderBy: { id: "asc" }, include: { servicio: true } })
   res.json(devs.map(d => {
     const m = getDispositivo(d.id)
@@ -19,7 +19,7 @@ router.get("/", ...auth, async (req: any, res) => {
 router.post("/", ...auth, async (req: any, res) => {
   try {
     const count = await prisma.dispositivo.count({ where: { usuarioId: req.usuario.id } })
-    if (count >= 2) return res.status(400).json({ error: "Máximo 2 dispositivos por cuenta" })
+    if (count >= 4) return res.status(400).json({ error: "Máximo 4 dispositivos por cuenta" })
     const { nombre, servicioId, pais } = req.body
     if (!nombre?.trim()) return res.status(400).json({ error: "nombre requerido" })
     res.json(await prisma.dispositivo.create({
@@ -82,25 +82,5 @@ router.post("/:id/desconectar", ...auth, async (_req, res) => {
   } catch { res.status(500).json({ error: "Error" }) }
 })
 
-// ── Reglas del dispositivo ────────────────────────────────────────────────────
-
-router.get("/:id/reglas", ...auth, async (req, res) => {
-  res.json(await prisma.respuestaRegla.findMany({
-    where: { dispositivoId: Number(req.params.id) },
-    orderBy: { orden: "asc" },
-    include: { pasos: { orderBy: { orden: "asc" } } },
-  }))
-})
-
-router.post("/:id/reglas", ...auth, async (req, res) => {
-  try {
-    const dispositivoId = Number(req.params.id)
-    const count = await prisma.respuestaRegla.count({ where: { dispositivoId } })
-    res.json(await prisma.respuestaRegla.create({
-      data: { dispositivoId, palabrasClave: req.body.palabrasClave?.trim(), orden: count },
-      include: { pasos: true },
-    }))
-  } catch { res.status(500).json({ error: "Error" }) }
-})
 
 export default router

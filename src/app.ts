@@ -6,10 +6,13 @@ import adminRouter from "./routes/admin"
 import uploadRouter from "./routes/upload"
 import serviciosRouter from "./routes/servicios"
 import dispositivosRouter from "./routes/dispositivos"
-import { reglasRouter, pasosRouter } from "./routes/reglas"
+import { reglasRouter } from "./routes/reglas"
 import plantillasRouter from "./routes/plantillas"
 import clientesRouter from "./routes/clientes"
-import { demosRouter, clientesDemoRouter } from "./routes/demos"
+import { clientesDemoRouter } from "./routes/demos"
+import rutasRecordatorioRouter from "./routes/rutasRecordatorio"
+import { buscarUsuarioIPTV } from "./iptvservice"
+import { auth } from "./middleware/auth"
 
 const app = express()
 app.use(cors())
@@ -22,10 +25,19 @@ app.use("/upload", uploadRouter)
 app.use("/servicios", serviciosRouter)
 app.use("/dispositivos", dispositivosRouter)
 app.use("/reglas", reglasRouter)
-app.use("/pasos", pasosRouter)
 app.use("/plantillas", plantillasRouter)
 app.use("/cuentas-clientes", clientesRouter)
-app.use("/demos", demosRouter)
 app.use("/clientes-demo", clientesDemoRouter)
+app.use("/rutas-recordatorio", rutasRecordatorioRouter)
+
+// Consulta directa de una cuenta en el panel IPTV
+app.get("/iptv/cuenta/:usuario", ...auth, async (req: any, res) => {
+  try {
+    const datos = await buscarUsuarioIPTV(req.params.usuario, req.usuario.id)
+    res.json(datos)
+  } catch (e: any) {
+    res.status(500).json({ error: e.message })
+  }
+})
 
 export default app

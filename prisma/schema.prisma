@@ -18,6 +18,9 @@ model Usuario {
   // Expiración de la cuenta (null = sin límite, solo admin tiene null)
   expiraEn    DateTime?
   creadoEn    DateTime  @default(now())
+  // Credenciales del panel IPTV (Puppeteer)
+  panelUsuario  String?
+  panelPassword String?
 
   // Relaciones propias de cada cliente
   dispositivos      Dispositivo[]
@@ -26,6 +29,7 @@ model Usuario {
   demos             CuentaDemo[]
   clientesDemo      ClienteDemo[]
   plantillasMsg     PlantillaRecordatorio[]
+  rutasRecordatorio RutaRecordatorio[]
 }
 
 // ─── Servicios (por usuario) ─────────────────────────────────────────────────
@@ -34,14 +38,30 @@ model Servicio {
   usuarioId  Int
   nombre     String
   color      String @default("#22c55e")
-  demosActivo      Boolean @default(true)
-  msgDemoEntregada String?
-  msgDemoYaTiene   String?
-  msgDemoSinStock  String?
+  // Todo servicio está conectado al panel IPTV: las demos se crean ahí automáticamente
+  demosActivo        Boolean @default(true)
+  planDemo           String? // nombre exacto del plan en el panel; sin plan → no hay demos
+  adultos            String  @default("preguntar") // "preguntar" | "si" | "no"
+  // Códigos que disparan una demo (número, texto o emoji; sin distinguir mayúsculas)
+  codigoDemo           String @default("22") // cliente y dueño; usa la opción "adultos"
+  codigoDemoAdultos    String @default("23") // solo el dueño: demo directa con adultos
+  codigoDemoSinAdultos String @default("24") // solo el dueño: demo directa sin adultos
+  msgDemoEntregada   String?
+  msgDemoYaTiene     String?
   msgDemoDesactivado String?
+  // Vencimientos y recordatorios automáticos
+  tieneRecordatorios Boolean @default(true)
+  // Configuración para reenvío de credenciales en formatos de app
+  smartersNombre     String?
+  smartersUrl        String?
+  iphoneUrl          String?
+  // Imagen opcional que se envía después de entregar una demo
+  imagenDespuesDemo        String?
+  captionImagenDespuesDemo String?
 
   usuario        Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
   dispositivos   Dispositivo[]
+  reglas         RespuestaRegla[]
   cuentasCliente CuentaCliente[]
   demos          CuentaDemo[]
   clientesDemo   ClienteDemo[]
@@ -59,24 +79,40 @@ model Dispositivo {
   // "desconectado" | "pausado" | "esperando_qr" | "conectado"
   estado     String   @default("desconectado")
   telefono   String?
+  // Desde cuándo se cayó sin que el dueño lo pausara o desconectara (null = sin caída). Alimenta el banner.
+  caidoDesde DateTime?
   creadoEn   DateTime @default(now())
 
-  usuario  Usuario          @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-  servicio Servicio?        @relation(fields: [servicioId], references: [id])
-  reglas   RespuestaRegla[]
+  usuario  Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  servicio Servicio? @relation(fields: [servicioId], references: [id])
+  rutasRecordatorio RutaRecordatorio[]
+}
+
+// ─── Número que envía los recordatorios según el país del cliente ────────────
+// Sin fila para un país → no se envían recordatorios a clientes de ese país.
+model RutaRecordatorio {
+  id            Int    @id @default(autoincrement())
+  usuarioId     Int
+  pais          String // mismo nombre que devuelve detectarPais() ("Argentina", "Bolivia"…)
+  dispositivoId Int
+
+  usuario     Usuario     @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  dispositivo Dispositivo @relation(fields: [dispositivoId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, pais])
 }
 
 // ─── Reglas y pasos de respuesta automática (por dispositivo) ────────────────
 model RespuestaRegla {
   id            Int      @id @default(autoincrement())
-  dispositivoId Int
+  servicioId    Int
   palabrasClave String
   orden         Int      @default(0)
   activo        Boolean  @default(true)
   creadoEn      DateTime @default(now())
 
-  dispositivo Dispositivo     @relation(fields: [dispositivoId], references: [id], onDelete: Cascade)
-  pasos       RespuestaPaso[]
+  servicio Servicio        @relation(fields: [servicioId], references: [id], onDelete: Cascade)
+  pasos    RespuestaPaso[]
 }
 
 model RespuestaPaso {
@@ -93,46 +129,53 @@ model RespuestaPaso {
 
 // ─── Plantillas de recordatorio (por usuario) ────────────────────────────────
 model PlantillaRecordatorio {
-  id        Int    @id @default(autoincrement())
-  usuarioId Int
-  nombre    String // "Cuenta expirada", "Próximo vencimiento", etc.
-  // "texto" | "imagen"
-  tipo      String @default("texto")
-  mensaje   String // texto con variables {usuario} {servicio} {pais}
-  imagenUrl String? // URL de imagen opcional
-  creadoEn  DateTime @default(now())
+  id          Int    @id @default(autoincrement())
+  usuarioId   Int
+  nombre      String // "Cuenta expirada", "Próximo vencimiento", etc.
+  // "texto" | "imagen" | "documento" | "audio"
+  tipo        String  @default("texto")
+  mensaje     String  // texto con variables {usuario} {contrasena} {servicio} {pais} {expira}
+  imagenUrl   String? // URL de imagen/archivo opcional
+  // País por defecto: si se asigna, esta plantilla se usa automáticamente para números de ese país
+  paisDefault String?
+  creadoEn    DateTime @default(now())
 
   usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
 }
 
 // ─── Cuentas de clientes (estructura plana, 1 registro = 1 cuenta) ───────────
 model CuentaCliente {
-  id         Int      @id @default(autoincrement())
-  usuarioId  Int
-  telefono   String
-  usuario    String
-  contrasena String
-  servicioId Int
-  pais       String   @default("Bolivia")
-  notas      String?
-  creadoEn   DateTime @default(now())
+  id                  Int       @id @default(autoincrement())
+  usuarioId           Int
+  telefono            String
+  usuario             String
+  contrasena          String?
+  servicioId          Int?
+  pais                String    @default("Bolivia")
+  notas               String?
+  expiraEn            DateTime?
+  recordatorioEnviado     Boolean   @default(false)
+  recordatorioAuto        Boolean   @default(true)
+  plantillaRecordatorioId Int?
+  paquete                 String?
+  conexiones              String?
+  creadoEn                DateTime  @default(now())
 
-  usuarioRel Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-  servicio   Servicio @relation(fields: [servicioId], references: [id])
+  usuarioRel Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  servicio   Servicio? @relation(fields: [servicioId], references: [id])
 }
 
-// ─── Cuentas demo por servicio ───────────────────────────────────────────────
+// ─── Cuentas demo creadas en el panel por el bot ─────────────────────────────
 model CuentaDemo {
   id         Int      @id @default(autoincrement())
   usuarioId  Int
   servicioId Int
   usuario    String
   contrasena String
-  disponible Boolean  @default(true)
   creadoEn   DateTime @default(now())
 
   usuarioRel Usuario      @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-  servicio   Servicio     @relation(fields: [servicioId], references: [id])
+  servicio   Servicio     @relation(fields: [servicioId], references: [id], onDelete: Cascade)
   sesiones   ClienteDemo[]
 }
 
@@ -147,8 +190,8 @@ model ClienteDemo {
   entregadoEn DateTime @default(now())
 
   usuarioRel Usuario    @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-  cuenta     CuentaDemo @relation(fields: [cuentaId], references: [id])
-  servicio   Servicio   @relation(fields: [servicioId], references: [id])
+  cuenta     CuentaDemo @relation(fields: [cuentaId], references: [id], onDelete: Cascade)
+  servicio   Servicio   @relation(fields: [servicioId], references: [id], onDelete: Cascade)
 
   @@unique([usuarioId, telefono, servicioId])
 }

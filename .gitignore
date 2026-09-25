@@ -3,3 +3,11 @@ node_modules
 .env
 
 /generated/prisma
+
+# Sesiones de WhatsApp: dan acceso al número, nunca al repositorio
+/sesiones
+auth_*/
+
+# Copias de la base y archivos subidos por los usuarios
+*.db.backup*
+/uploads

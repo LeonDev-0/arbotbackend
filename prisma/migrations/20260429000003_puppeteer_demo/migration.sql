@@ -1,0 +1,3 @@
+ALTER TABLE "Servicio" ADD COLUMN "usarPuppeteer" BOOLEAN NOT NULL DEFAULT 0;
+ALTER TABLE "Servicio" ADD COLUMN "puppeteerPlan" TEXT;
+ALTER TABLE "Servicio" ADD COLUMN "puppeteerAdultos" BOOLEAN NOT NULL DEFAULT 1;
