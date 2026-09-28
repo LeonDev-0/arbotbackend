@@ -28,3 +28,18 @@ export async function checkExpiracion(req: any, res: any, next: any) {
 }
 
 export const auth = [authMiddleware, checkExpiracion]
+
+/* ¿El registro pertenece al usuario de la petición? (el admin puede operar sobre todo).
+   Si no, las rutas responden 404: no revelan que el registro existe. */
+export const esPropio = (req: any, registro: { usuarioId: number } | null | undefined): boolean =>
+  !!registro && (req.usuario?.rol === "admin" || registro.usuarioId === req.usuario?.id)
+
+/* Un id opcional (servicio, plantilla…) debe ser null o de un registro propio */
+export async function idPropioOpcional(
+  req: any, id: unknown, buscar: (id: number) => Promise<{ usuarioId: number } | null>,
+): Promise<number | null | false> {
+  if (id === null || id === undefined || id === "") return null
+  const n = Number(id)
+  if (!Number.isInteger(n)) return false
+  return esPropio(req, await buscar(n)) ? n : false
+}

@@ -14,6 +14,7 @@ import { crearUsuarioIPTV, buscarUsuarioIPTV } from "./src/iptvservice"
 import { resolverPlantilla } from "./src/routes/clientes"
 import { normalizarCodigo, clavesRegla } from "./src/utils/codigosDemo"
 import { SESIONES_DIR } from "./src/config"
+import { leerArchivo } from "./src/utils/archivos"
 
 export type EstadoWA = "desconectado" | "pausado" | "esperando_qr" | "conectado"
 
@@ -177,8 +178,7 @@ async function generarNombre(usuarioId: number): Promise<string> {
 }
 
 async function enviarPaso(sock: WASocket, jid: string, paso: { tipo: string; contenido: string; caption?: string | null }) {
-  // /uploads/file.jpg → uploads/file.jpg → /app/uploads/file.jpg (CWD del contenedor es /app)
-  const src = (c: string) => c.startsWith("http") ? { url: c } : fs.readFileSync(path.resolve(c.startsWith("/") ? c.slice(1) : c))
+  const src = leerArchivo // solo archivos subidos (/uploads/...) o URLs públicas
   const ext = paso.contenido.split('.').pop()?.toLowerCase() ?? ''
 
   if (paso.tipo === "texto") {
@@ -330,11 +330,13 @@ async function handleDemoCreacion(
         `📲 Si necesitas ayuda para instalar, escríbenos.`
 
     await sock.sendMessage(jid, { text: msg })
+    // La demo ya se entregó: si la imagen falla solo se registra (no avisar "no se pudo crear")
     if (servicio.imagenDespuesDemo) {
-      const imgSrc = servicio.imagenDespuesDemo.startsWith("http")
-        ? { url: servicio.imagenDespuesDemo }
-        : fs.readFileSync(path.resolve(servicio.imagenDespuesDemo.startsWith("/") ? servicio.imagenDespuesDemo.slice(1) : servicio.imagenDespuesDemo))
-      await sock.sendMessage(jid, { image: imgSrc as any, caption: servicio.captionImagenDespuesDemo ?? "" })
+      try {
+        await sock.sendMessage(jid, { image: leerArchivo(servicio.imagenDespuesDemo) as any, caption: servicio.captionImagenDespuesDemo ?? "" })
+      } catch (e: any) {
+        console.error(`❌ [Bot ${dispositivoId}] Imagen después de la demo:`, e.message)
+      }
     }
   } catch (e: any) {
     limpiarEstadoDemo(key)

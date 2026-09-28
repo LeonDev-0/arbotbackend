@@ -2,12 +2,18 @@ import { Router } from "express"
 import { prisma } from "../../lib/prisma"
 import { auth } from "../middleware/auth"
 import { validarCodigos, clavesRegla } from "../utils/codigosDemo"
+import { archivoPermitido } from "../utils/archivos"
 
 const router = Router()
 
 const ADULTOS = ["preguntar", "si", "no"]
 const PLANES_DEMO = ["DEMO 3 HORAS", "DEMO 1 HORA"] // nombres exactos en el panel
 const texto = (v: any) => (typeof v === "string" && v.trim()) || null
+
+// Errores de datos que no son de códigos (se revisan junto con ellos)
+const errorArchivo = (d: { imagenDespuesDemo: string | null }) =>
+  d.imagenDespuesDemo && !archivoPermitido(d.imagenDespuesDemo)
+    ? "Imagen después de la demo: sube un archivo o usa una URL pública (http/https)" : null
 
 // Campos editables de un servicio (mismo mapeo al crear y al editar)
 function datosServicio(b: any) {
@@ -40,7 +46,7 @@ router.get("/", ...auth, async (req: any, res) => {
 router.post("/", ...auth, async (req: any, res) => {
   try {
     const data = datosServicio(req.body)
-    const error = validarCodigos(data, [])
+    const error = errorArchivo(data) ?? validarCodigos(data, [])
     if (error) return res.status(400).json({ error })
     res.json(await prisma.servicio.create({
       data: { usuarioId: req.usuario.id, ...data },
@@ -54,10 +60,10 @@ router.put("/:id", ...auth, async (req: any, res) => {
   try {
     const s = await prisma.servicio.findUnique({ where: { id: Number(req.params.id) } })
     if (!s || (req.usuario.rol !== "admin" && s.usuarioId !== req.usuario.id))
-      return res.status(403).json({ error: "Sin permisos" })
+      return res.status(404).json({ error: "Servicio no encontrado" })
     const data = datosServicio(req.body)
     const reglas = await prisma.respuestaRegla.findMany({ where: { servicioId: s.id }, select: { palabrasClave: true } })
-    const error = validarCodigos(data, reglas.flatMap(r => clavesRegla(r.palabrasClave)))
+    const error = errorArchivo(data) ?? validarCodigos(data, reglas.flatMap(r => clavesRegla(r.palabrasClave)))
     if (error) return res.status(400).json({ error })
     res.json(await prisma.servicio.update({
       where: { id: s.id },
@@ -71,7 +77,7 @@ router.put("/:id", ...auth, async (req: any, res) => {
 router.get("/:id/reglas", ...auth, async (req: any, res) => {
   const s = await prisma.servicio.findUnique({ where: { id: Number(req.params.id) } })
   if (!s || (req.usuario.rol !== "admin" && s.usuarioId !== req.usuario.id))
-    return res.status(403).json({ error: "Sin permisos" })
+    return res.status(404).json({ error: "Servicio no encontrado" })
   res.json(await prisma.respuestaRegla.findMany({
     where: { servicioId: Number(req.params.id) },
     orderBy: { orden: "asc" },
@@ -83,7 +89,7 @@ router.delete("/:id", ...auth, async (req: any, res) => {
   try {
     const s = await prisma.servicio.findUnique({ where: { id: Number(req.params.id) } })
     if (!s || (req.usuario.rol !== "admin" && s.usuarioId !== req.usuario.id))
-      return res.status(403).json({ error: "Sin permisos" })
+      return res.status(404).json({ error: "Servicio no encontrado" })
     await prisma.servicio.delete({ where: { id: Number(req.params.id) } })
     res.json({ ok: true })
   } catch { res.status(500).json({ error: "No se puede eliminar" }) }

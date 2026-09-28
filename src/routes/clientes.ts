@@ -1,20 +1,24 @@
 import { Router } from "express"
-import fs from "fs"
-import path from "path"
+import { leerArchivo } from "../utils/archivos"
 import { prisma } from "../../lib/prisma"
-import { auth } from "../middleware/auth"
+import { auth, esPropio, idPropioOpcional } from "../middleware/auth"
 import { normalizarTelefono } from "../utils/telefono"
 import { detectarPais, numeroCompletoAJid } from "../../bot"
 import { buscarUsuarioIPTV } from "../iptvservice"
 import { resolverSocketRecordatorio } from "../recordatorios"
 
-// Igual que en bot.ts: URL relativa → Buffer del disco, URL http → { url }
-const src = (c: string) =>
-  c.startsWith("http")
-    ? { url: c }
-    : fs.readFileSync(path.resolve(c.startsWith("/") ? c.slice(1) : c))
+const src = leerArchivo // solo archivos subidos (/uploads/...) o URLs públicas
 
 const router = Router()
+
+const NO_ENCONTRADA = { error: "Cuenta no encontrada" }
+const buscarServicio  = (id: number) => prisma.servicio.findUnique({ where: { id }, select: { usuarioId: true } })
+const buscarPlantilla = (id: number) => prisma.plantillaRecordatorio.findUnique({ where: { id }, select: { usuarioId: true } })
+// Cuenta del usuario (o null): editar, borrar, sincronizar y recordatorios pasan por aquí
+const cuentaPropia = async (req: any) => {
+  const c = await prisma.cuentaCliente.findUnique({ where: { id: Number(req.params.id) }, include: { servicio: true } })
+  return esPropio(req, c) ? c : null
+}
 console.log("✅ [clientes.ts] router cargado OK")
 
 /* Resuelve qué plantilla corresponde a un teléfono dado.
@@ -72,11 +76,12 @@ router.post("/", ...auth, async (req: any, res) => {
       return res.status(400).json({ error: "Teléfono y usuario son requeridos" })
 
     const telNormalizado = normalizarTelefono(telefono)
+    const servicioPropio = await idPropioOpcional(req, servicioId, buscarServicio)
+    const plantillaPropia = await idPropioOpcional(req, plantillaRecordatorioId, buscarPlantilla)
+    if (servicioPropio === false || plantillaPropia === false) return res.status(400).json({ error: "Servicio o plantilla inválidos" })
 
     // Si el usuario no eligió plantilla manualmente, auto-detectar por país del teléfono
-    const plantillaId = plantillaRecordatorioId
-      ? Number(plantillaRecordatorioId)
-      : await resolverPlantilla(req.usuario.id, telNormalizado)
+    const plantillaId = plantillaPropia ?? await resolverPlantilla(req.usuario.id, telNormalizado)
 
     res.json(await prisma.cuentaCliente.create({
       data: {
@@ -84,7 +89,7 @@ router.post("/", ...auth, async (req: any, res) => {
         telefono:   telNormalizado,
         usuario:    usuario.trim(),
         contrasena: contrasena?.trim() || null,
-        servicioId: servicioId ? Number(servicioId) : null,
+        servicioId: servicioPropio,
         pais:       pais ?? "Bolivia",
         notas:      notas?.trim() || null,
         expiraEn:   expiraEn ? new Date(expiraEn) : null,
@@ -193,54 +198,44 @@ async function sincronizarImportados(usuarioId: number, ids: number[]): Promise<
 
 router.put("/:id", ...auth, async (req: any, res) => {
   const id = Number(req.params.id)
-  console.log(`\n${"─".repeat(50)}`)
-  console.log(`✏️  [PUT /cuentas-clientes/${id}] body recibido:`, JSON.stringify(req.body, null, 2))
   try {
+    const actual = await cuentaPropia(req)
+    if (!actual) return res.status(404).json(NO_ENCONTRADA)
     const { telefono, usuario, contrasena, servicioId, pais, notas, expiraEn, paquete, plantillaRecordatorioId } = req.body
+    const servicioPropio = await idPropioOpcional(req, servicioId, buscarServicio)
+    const plantillaPropia = await idPropioOpcional(req, plantillaRecordatorioId, buscarPlantilla)
+    if (servicioPropio === false || plantillaPropia === false) return res.status(400).json({ error: "Servicio o plantilla inválidos" })
+
     const data: any = {
       usuario,
       contrasena: contrasena?.trim() || null,
       pais,
       notas:      notas?.trim()   || null,
       paquete:    paquete?.trim() || null,
-      servicioId:              servicioId              ? Number(servicioId)              : null,
-      plantillaRecordatorioId: plantillaRecordatorioId ? Number(plantillaRecordatorioId) : null,
+      servicioId:              servicioPropio,
+      plantillaRecordatorioId: plantillaPropia,
     }
     if (telefono) data.telefono = normalizarTelefono(telefono)
 
-    const actual = await prisma.cuentaCliente.findUnique({ where: { id }, select: { expiraEn: true } })
     const nuevaFecha = expiraEn ? new Date(expiraEn) : null
     data.expiraEn = nuevaFecha
+    // Si cambió el vencimiento, el recordatorio vuelve a quedar pendiente
+    if (actual.expiraEn?.getTime() !== nuevaFecha?.getTime()) data.recordatorioEnviado = false
 
-    console.log(`✏️  [PUT] expiraEn recibido: "${expiraEn}" → Date: ${nuevaFecha}`)
-    console.log(`✏️  [PUT] expiraEn actual en DB: ${actual?.expiraEn}`)
-
-    if (actual?.expiraEn?.getTime() !== nuevaFecha?.getTime()) {
-      data.recordatorioEnviado = false
-      console.log(`✏️  [PUT] fecha cambió → resetea recordatorioEnviado`)
-    }
-
-    console.log(`✏️  [PUT] data final a guardar:`, JSON.stringify(data, null, 2))
-    const resultado = await prisma.cuentaCliente.update({
-      where: { id },
-      data,
-      include: { servicio: true },
-    })
-    console.log(`✅ [PUT] guardado OK — expiraEn en DB: ${resultado.expiraEn}`)
+    const resultado = await prisma.cuentaCliente.update({ where: { id }, data, include: { servicio: true } })
+    console.log(`✏️  [cuentas-clientes] #${id} actualizada (${resultado.usuario})`)
     res.json(resultado)
   } catch (e: any) {
     console.error(`❌ [PUT /cuentas-clientes/${id}] ERROR:`, e?.message)
-    console.error(e?.stack?.split("\n").slice(0, 5).join("\n"))
-    res.status(500).json({ error: e?.message ?? "Error al actualizar" })
+    res.status(500).json({ error: "Error al actualizar" })
   }
 })
 
 router.patch("/:id/recordatorio-auto", ...auth, async (req: any, res) => {
   try {
-    const id = Number(req.params.id)
-    const cuenta = await prisma.cuentaCliente.findUnique({ where: { id } })
-    if (!cuenta || (req.usuario.rol !== "admin" && cuenta.usuarioId !== req.usuario.id))
-      return res.status(403).json({ error: "Sin permisos" })
+    const cuenta = await cuentaPropia(req)
+    if (!cuenta) return res.status(404).json(NO_ENCONTRADA)
+    const id = cuenta.id
     const actualizada = await prisma.cuentaCliente.update({
       where: { id },
       data: { recordatorioAuto: !cuenta.recordatorioAuto },
@@ -263,8 +258,10 @@ router.delete("/lote", ...auth, async (req: any, res) => {
   res.json({ ok: true, eliminados: count })
 })
 
-router.delete("/:id", ...auth, async (req, res) => {
-  await prisma.cuentaCliente.delete({ where: { id: Number(req.params.id) } })
+router.delete("/:id", ...auth, async (req: any, res) => {
+  const cuenta = await cuentaPropia(req)
+  if (!cuenta) return res.status(404).json(NO_ENCONTRADA)
+  await prisma.cuentaCliente.delete({ where: { id: cuenta.id } })
   res.json({ ok: true })
 })
 
@@ -279,10 +276,7 @@ router.post("/:id/sincronizar", ...auth, async (req: any, res) => {
     cuenta = await prisma.cuentaCliente.findUnique({ where: { id } })
     console.log(`🔄 [sincronizar] Cuenta encontrada:`, cuenta ? `usuario="${cuenta.usuario}"` : "null")
 
-    if (!cuenta || (req.usuario.rol !== "admin" && cuenta.usuarioId !== req.usuario.id)) {
-      console.log(`🔄 [sincronizar] Sin permisos`)
-      return res.status(403).json({ error: "Sin permisos" })
-    }
+    if (!esPropio(req, cuenta)) return res.status(404).json(NO_ENCONTRADA)
     if (!cuenta.usuario) {
       console.log(`🔄 [sincronizar] Sin usuario IPTV`)
       return res.status(400).json({ error: "Esta cuenta no tiene usuario IPTV asignado" })
@@ -290,7 +284,6 @@ router.post("/:id/sincronizar", ...auth, async (req: any, res) => {
 
     console.log(`🔄 [sincronizar] Llamando buscarUsuarioIPTV("${cuenta.usuario}")...`)
     const datos = await buscarUsuarioIPTV(cuenta.usuario, req.usuario.id)
-    console.log(`🔄 [sincronizar] Datos recibidos:`, JSON.stringify(datos, null, 2))
 
     let expiraEn: Date | null = null
     if (datos.expira) {
@@ -311,7 +304,7 @@ router.post("/:id/sincronizar", ...auth, async (req: any, res) => {
       },
       include: { servicio: true },
     })
-    console.log(`✅ [sincronizar] OK — ${cuenta.usuario} | pass: ${datos.password} | plan: ${datos.paquete}`)
+    console.log(`✅ [sincronizar] OK — ${cuenta.usuario} | plan: ${datos.paquete}`)
     res.json(actualizada)
   } catch (e: any) {
     console.error(`❌ [sincronizar] EXCEPCIÓN:`)
@@ -331,16 +324,13 @@ router.post("/:id/sincronizar", ...auth, async (req: any, res) => {
 
 router.post("/:id/recordatorio", ...auth, async (req: any, res) => {
   try {
-    const cuenta = await prisma.cuentaCliente.findUnique({
-      where: { id: Number(req.params.id) },
-      include: { servicio: true },
-    })
-    if (!cuenta) return res.status(404).json({ error: "Cuenta no encontrada" })
+    const cuenta = await cuentaPropia(req)
+    if (!cuenta) return res.status(404).json(NO_ENCONTRADA)
 
     const plantilla = await prisma.plantillaRecordatorio.findUnique({
       where: { id: Number(req.body.plantillaId) },
     })
-    if (!plantilla) return res.status(404).json({ error: "Plantilla no encontrada" })
+    if (!plantilla || plantilla.usuarioId !== cuenta.usuarioId) return res.status(404).json({ error: "Plantilla no encontrada" })
 
     // Mismo número configurado en "Envío de recordatorios" que usa el envío automático
     const { sock, error } = await resolverSocketRecordatorio(req.usuario.id, cuenta.telefono)

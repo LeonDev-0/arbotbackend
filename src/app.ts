@@ -1,9 +1,10 @@
 import express from "express"
 import cors from "cors"
+import path from "path"
 import { UPLOADS_DIR } from "./config"
 import authRouter from "./routes/auth"
 import adminRouter from "./routes/admin"
-import uploadRouter from "./routes/upload"
+import uploadRouter, { EXTENSIONES_PERMITIDAS } from "./routes/upload"
 import serviciosRouter from "./routes/servicios"
 import dispositivosRouter from "./routes/dispositivos"
 import { reglasRouter } from "./routes/reglas"
@@ -17,7 +18,20 @@ import { auth } from "./middleware/auth"
 const app = express()
 app.use(cors())
 app.use(express.json())
-app.use("/uploads", express.static(UPLOADS_DIR))
+// Archivos subidos: solo tipos permitidos y sin posibilidad de ejecutarse en el navegador
+const MEDIA_EN_LINEA = /\.(jpe?g|png|gif|webp|mp4|3gp|mov|webm|mp3|ogg|opus|m4a|wav|aac)$/i
+app.use("/uploads", (req, res, next) => {
+  const ext = path.extname(req.path).slice(1).toLowerCase()
+  if (!EXTENSIONES_PERMITIDAS.has(ext)) return res.status(404).end()
+  next()
+}, express.static(UPLOADS_DIR, {
+  dotfiles: "deny",
+  setHeaders: (res, ruta) => {
+    res.setHeader("X-Content-Type-Options", "nosniff")
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox")
+    if (!MEDIA_EN_LINEA.test(ruta)) res.setHeader("Content-Disposition", "attachment")
+  },
+}))
 
 app.use("/auth", authRouter)
 app.use("/admin/usuarios", adminRouter)

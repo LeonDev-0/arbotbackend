@@ -1,16 +1,12 @@
 import { prisma } from "../lib/prisma"
 import { getDispositivo, numeroCompletoAJid, detectarPais } from "../bot"
 import { buscarUsuarioIPTV } from "./iptvservice"
-import fs from "fs"
-import path from "path"
+import { leerArchivo } from "./utils/archivos"
 
 const INTERVALO_MS = 60 * 60 * 1000 // cada hora
 const delayAleatorio = () => new Promise(r => setTimeout(r, 8000 + Math.random() * 7000)) // 8-15 seg
 
-const src = (c: string) =>
-  c.startsWith("http")
-    ? { url: c }
-    : fs.readFileSync(path.resolve(c.startsWith("/") ? c.slice(1) : c))
+const src = leerArchivo // solo archivos subidos (/uploads/...) o URLs públicas
 
 function fmtFecha(d: Date): string {
   return d.toLocaleDateString("es-BO", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" })
