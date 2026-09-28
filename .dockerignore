@@ -5,7 +5,8 @@ node_modules
 uploads
 generated
 
-# Base de datos y copias (con datos reales de clientes)
+# Base de datos y copias (con datos reales de clientes; en Docker es el volumen /app/data)
+data
 *.db
 *.db.*
 *.db-journal

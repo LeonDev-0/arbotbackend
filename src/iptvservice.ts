@@ -1,7 +1,9 @@
-import puppeteer, { Browser, Page } from 'puppeteer'
+import puppeteer, { Browser, BrowserContext, Page } from 'puppeteer'
 import { prisma } from '../lib/prisma'
 
 let browser: Browser | null = null
+// Cada usuario usa su propio contexto (cookies/sesión del panel aisladas): nadie opera con la sesión de otro
+const contextos = new Map<number, Promise<BrowserContext>>()
 
 const PANEL_BASES = [
   'https://resellermastv.com:8443',
@@ -9,9 +11,10 @@ const PANEL_BASES = [
 ]
 let activePanelIndex = 0
 
-const PANEL_CREDENTIALS_DEFAULT = { username: "", password: "" } // credenciales eliminadas del historial
-
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+// Faltan credenciales: reintentar no sirve de nada
+class SinCredencialesPanel extends Error {}
 
 async function conReintentos<T>(fn: () => Promise<T>, intentos = 3, espera = 2500): Promise<T> {
   let ultimoError: Error | null = null
@@ -19,6 +22,7 @@ async function conReintentos<T>(fn: () => Promise<T>, intentos = 3, espera = 250
     try {
       return await fn()
     } catch (e: any) {
+      if (e instanceof SinCredencialesPanel) throw e
       ultimoError = e
       console.warn(`⚠️  [Puppeteer] intento ${i}/${intentos} falló: ${e.message}`)
       if (i < intentos) await delay(espera)
@@ -32,10 +36,12 @@ async function getPanelCredentials(usuarioId: number): Promise<{ username: strin
     where: { id: usuarioId },
     select: { panelUsuario: true, panelPassword: true },
   })
-  return {
-    username: u?.panelUsuario?.trim()  || PANEL_CREDENTIALS_DEFAULT.username,
-    password: u?.panelPassword?.trim() || PANEL_CREDENTIALS_DEFAULT.password,
-  }
+  const username = u?.panelUsuario?.trim()
+  const password = u?.panelPassword?.trim()
+  // Sin valores por defecto: cada usuario opera solo con su propia cuenta del panel
+  if (!username || !password)
+    throw new SinCredencialesPanel('Faltan las credenciales del panel IPTV. Configúralas en "Panel IPTV".')
+  return { username, password }
 }
 
 async function navegarConLogin(page: Page, path: string, usuarioId: number): Promise<void> {
@@ -95,7 +101,20 @@ async function initBrowser(): Promise<void> {
       ],
       ignoreDefaultArgs: ['--enable-automation'],
     })
+    browser.on('disconnected', () => { browser = null; contextos.clear() })
   }
+}
+
+// Página nueva dentro del contexto (sesión del panel) del usuario
+async function nuevaPagina(usuarioId: number): Promise<Page> {
+  await initBrowser()
+  let ctx = contextos.get(usuarioId)
+  if (!ctx) {
+    ctx = browser!.createBrowserContext()
+    contextos.set(usuarioId, ctx)
+    ctx.catch(() => contextos.delete(usuarioId))
+  }
+  return (await ctx).newPage()
 }
 
 async function filtrarPorUsuario(page: Page, usuario: string): Promise<void> {
@@ -154,8 +173,7 @@ async function seleccionarCanalesAdultos(page: Page): Promise<void> {
 }
 
 async function intentarCrearUsuario(planTexto: string, incluirAdultos = true, usuarioId: number): Promise<{ usuario: string; password: string; plan: string; expira: string }> {
-  if (!browser) throw new Error('Browser no inicializado')
-  const page = await browser.newPage()
+  const page = await nuevaPagina(usuarioId)
   const usuario = generarUsuario()
   try {
     await navegarConLogin(page, '/lines/create-with-package', usuarioId)
@@ -188,12 +206,12 @@ async function intentarCrearUsuario(planTexto: string, incluirAdultos = true, us
 }
 
 export async function crearUsuarioIPTV(planTexto: string, incluirAdultos = true, usuarioId: number): Promise<{ usuario: string; password: string; plan: string; expira: string }> {
-  await initBrowser()
   let ultimoError: Error | null = null
   for (let intento = 1; intento <= 3; intento++) {
     try {
       return await intentarCrearUsuario(planTexto, incluirAdultos, usuarioId)
     } catch (e: any) {
+      if (e instanceof SinCredencialesPanel) throw e
       ultimoError = e
       if (intento < 3) await delay(2000)
     }
@@ -202,9 +220,7 @@ export async function crearUsuarioIPTV(planTexto: string, incluirAdultos = true,
 }
 
 async function implBuscarUsuarioIPTV(usuario: string, usuarioId: number): Promise<{ usuario: string; password: string; reseller: string; expira: string; baneado: string; paquete: string; trial: string; conexiones: string; creado: string }> {
-  await initBrowser()
-  if (!browser) throw new Error('Browser no inicializado')
-  const page = await browser.newPage()
+  const page = await nuevaPagina(usuarioId)
   try {
     await navegarConLogin(page, '/lines', usuarioId)
     await filtrarPorUsuario(page, usuario)
@@ -235,9 +251,7 @@ async function implBuscarUsuarioIPTV(usuario: string, usuarioId: number): Promis
 }
 
 async function implRenovarUsuarioIPTV(usuario: string, planTexto: string, usuarioId: number): Promise<void> {
-  await initBrowser()
-  if (!browser) throw new Error('Browser no inicializado')
-  const page = await browser.newPage()
+  const page = await nuevaPagina(usuarioId)
   try {
     await navegarConLogin(page, '/lines', usuarioId)
     await filtrarPorUsuario(page, usuario)
@@ -304,8 +318,7 @@ async function implRenovarUsuarioIPTV(usuario: string, planTexto: string, usuari
 }
 
 async function implLeerCreditosPanel(usuarioId: number): Promise<number | null> {
-  await initBrowser()
-  const page = await browser!.newPage()
+  const page = await nuevaPagina(usuarioId)
   try {
     await navegarConLogin(page, '/dashboard', usuarioId)
     await page.waitForFunction(() => {
@@ -335,7 +348,15 @@ async function implLeerCreditosPanel(usuarioId: number): Promise<number | null> 
   }
 }
 
+// Cerrar la sesión del panel de un usuario (p. ej. al cambiar sus credenciales): el resto sigue igual
+export async function cerrarSesionPanel(usuarioId: number): Promise<void> {
+  const ctx = contextos.get(usuarioId)
+  contextos.delete(usuarioId)
+  if (ctx) await (await ctx).close().catch(() => {})
+}
+
 export async function cerrarNavegador(): Promise<void> {
+  contextos.clear()
   if (browser) { await browser.close(); browser = null }
 }
 

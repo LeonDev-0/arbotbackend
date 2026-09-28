@@ -11,3 +11,8 @@ auth_*/
 # Copias de la base y archivos subidos por los usuarios
 *.db.backup*
 /uploads
+
+# Base de datos (datos reales de clientes): vive en data/, nunca en git
+/data
+*.db
+*.db-journal

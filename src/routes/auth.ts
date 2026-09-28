@@ -30,38 +30,36 @@ router.get("/me", authMiddleware, async (req: any, res) => {
   res.json(await prisma.usuario.findUnique({ where: { id: req.usuario.id }, select: USER_SELECT }))
 })
 
-const PANEL_SELECT = { panelUsuario: true, panelPassword: true }
+// La contraseña del panel nunca sale del servidor: solo se informa si está guardada
+const panelPublico = (u: { panelUsuario: string | null; panelPassword: string | null } | null) => ({
+  panelUsuario:  u?.panelUsuario ?? "",
+  tienePassword: !!u?.panelPassword,
+})
 
 router.get("/panel-config", ...auth, async (req: any, res) => {
-  const u = await prisma.usuario.findUnique({ where: { id: req.usuario.id }, select: PANEL_SELECT })
-  res.json(u)
+  const u = await prisma.usuario.findUnique({ where: { id: req.usuario.id }, select: { panelUsuario: true, panelPassword: true } })
+  res.json(panelPublico(u))
 })
 
 router.put("/panel-config", ...auth, async (req: any, res) => {
   try {
-    const { panelUsuario, panelPassword } = req.body
-    const actual = await prisma.usuario.findUnique({
-      where: { id: req.usuario.id },
-      select: PANEL_SELECT,
-    })
-
-    const nuevoUsuario  = panelUsuario?.trim()  || null
-    const nuevaPassword = panelPassword?.trim() || null
-
-    const cambio = nuevoUsuario !== actual?.panelUsuario || nuevaPassword !== actual?.panelPassword
+    const actual = await prisma.usuario.findUnique({ where: { id: req.usuario.id }, select: { panelUsuario: true, panelPassword: true } })
+    const nuevoUsuario  = String(req.body.panelUsuario ?? "").trim() || null
+    const nuevaPassword = String(req.body.panelPassword ?? "").trim() || null // vacía = conservar la guardada
 
     const u = await prisma.usuario.update({
       where: { id: req.usuario.id },
-      data: { panelUsuario: nuevoUsuario, panelPassword: nuevaPassword },
-      select: PANEL_SELECT,
+      data: { panelUsuario: nuevoUsuario, ...(nuevaPassword ? { panelPassword: nuevaPassword } : {}) },
+      select: { panelUsuario: true, panelPassword: true },
     })
 
-    if (cambio) {
-      const { cerrarNavegador } = await import("../iptvservice")
-      await cerrarNavegador()
+    // Credenciales nuevas → cerrar solo la sesión del panel de este usuario (la próxima operación inicia sesión de nuevo)
+    if (nuevoUsuario !== actual?.panelUsuario || (nuevaPassword && nuevaPassword !== actual?.panelPassword)) {
+      const { cerrarSesionPanel } = await import("../iptvservice")
+      await cerrarSesionPanel(req.usuario.id)
     }
 
-    res.json(u)
+    res.json(panelPublico(u))
   } catch { res.status(500).json({ error: "Error al guardar" }) }
 })
 
