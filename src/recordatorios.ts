@@ -212,15 +212,28 @@ async function verificarExpiracionesPendientes(): Promise<void> {
   }
 }
 
+/* Una sola vuelta a la vez: si una tarda más que el intervalo (panel lento, muchos envíos),
+   la siguiente se salta en vez de correr en paralelo y enviar recordatorios duplicados. */
+function sinSolapar(nombre: string, fn: () => Promise<void>): () => Promise<void> {
+  let enCurso = false
+  return async () => {
+    if (enCurso) { console.warn(`⏭️  ${nombre}: la vuelta anterior sigue en curso, se salta esta`); return }
+    enCurso = true
+    try { await fn() } finally { enCurso = false }
+  }
+}
+
 export function iniciarRecordatorios(): void {
-  procesarRecordatorios()
-  setInterval(procesarRecordatorios, INTERVALO_MS)
+  const recordatorios = sinSolapar("Recordatorios", procesarRecordatorios)
+  recordatorios()
+  setInterval(recordatorios, INTERVALO_MS)
   console.log("⏰ Recordatorios automáticos activos (revisión cada hora)")
 
+  const pendientes = sinSolapar("Expiraciones pendientes", verificarExpiracionesPendientes)
   const INTERVALO_PENDIENTES = 6 * 60 * 60 * 1000
   setTimeout(() => {
-    verificarExpiracionesPendientes()
-    setInterval(verificarExpiracionesPendientes, INTERVALO_PENDIENTES)
+    pendientes()
+    setInterval(pendientes, INTERVALO_PENDIENTES)
   }, 30 * 60 * 1000)
   console.log("🔍 Verificación de expiraciones pendientes activa (cada 6 horas)")
 }

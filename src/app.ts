@@ -16,8 +16,14 @@ import { buscarUsuarioIPTV } from "./iptvservice"
 import { auth } from "./middleware/auth"
 
 const app = express()
-app.use(cors())
-app.use(express.json())
+// Detrás de nginx (Docker): tomar la IP real del cliente (X-Forwarded-For) solo si viene de una red interna.
+// Sin esto, todas las peticiones parecerían de nginx y el límite de intentos bloquearía a todos a la vez.
+app.set("trust proxy", "loopback, linklocal, uniquelocal")
+// El frontend llega por el mismo dominio (nginx / proxy de Vite): no hace falta CORS.
+// Si algún día se sirve desde otro dominio, listarlo en CORS_ORIGINS (separados por coma).
+const origenesCors = (process.env.CORS_ORIGINS ?? "").split(",").map(o => o.trim()).filter(Boolean)
+if (origenesCors.length) app.use(cors({ origin: origenesCors }))
+app.use(express.json({ limit: "5mb" })) // la importación de Excel puede traer miles de filas
 // Archivos subidos: solo tipos permitidos y sin posibilidad de ejecutarse en el navegador
 const MEDIA_EN_LINEA = /\.(jpe?g|png|gif|webp|mp4|3gp|mov|webm|mp3|ogg|opus|m4a|wav|aac)$/i
 app.use("/uploads", (req, res, next) => {

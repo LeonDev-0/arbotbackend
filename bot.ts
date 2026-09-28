@@ -27,6 +27,7 @@ export interface InfoDispositivo {
 }
 
 const dispositivos = new Map<number, InfoDispositivo>()
+const conectando = new Set<number>() // dispositivos a mitad de conexión (evita abrir dos sockets)
 const qrMostrado = new Map<number, boolean>()
 
 // ── Estado del flujo de demo por cliente ─────────────────────────────────────
@@ -168,7 +169,6 @@ export function extraerJidReal(msg: any): string {
   const jidReal = esLid && msg.key?.remoteJidAlt
     ? msg.key.remoteJidAlt
     : msg.key.remoteJid
-  console.log(`🔎 addressingMode: ${msg.key?.addressingMode ?? "normal"} | jidReal: ${jidReal}`)
   return jidReal
 }
 
@@ -216,51 +216,12 @@ async function enviarPaso(sock: WASocket, jid: string, paso: { tipo: string; con
   }
 }
 
-/* ═══════════════════════════════════════════
-   LOG COMPLETO DEL CONTACTO
-═══════════════════════════════════════════ */
-async function logContacto(msg: any, sock: WASocket, dispositivoId: number) {
-  try {
-    const jidReal = extraerJidReal(msg)
-    const { codigoPais, numeroLocal, pais, numeroCompleto } = detectarPais(jidReal)
-
-    let fotoPerfil = "No disponible"
-    try { fotoPerfil = await sock.profilePictureUrl(jidReal, "image") ?? "No disponible" } catch {}
-
-    let estado = "No disponible"
-    try { const s = await sock.fetchStatus(jidReal); estado = (s as any)?.status ?? "No disponible" } catch {}
-
-    const timestamp = msg.messageTimestamp
-      ? new Date(Number(msg.messageTimestamp) * 1000).toLocaleString("es-BO")
-      : "N/A"
-
-    const tipoMensaje = Object.keys(msg.message ?? {}).join(", ") || "desconocido"
-    const texto = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? "(sin texto)"
-
-    console.log(`\n${"═".repeat(65)}`)
-    console.log(`📩  [Bot ${dispositivoId}] MENSAJE RECIBIDO — ${new Date().toLocaleString("es-BO")}`)
-    console.log(`${"═".repeat(65)}`)
-    console.log(`📱  remoteJid      : ${msg.key.remoteJid}`)
-    console.log(`📱  remoteJidAlt   : ${msg.key.remoteJidAlt ?? "N/A"}`)
-    console.log(`🌐  addressingMode : ${msg.key.addressingMode ?? "normal"}`)
-    console.log(`✅  JID usado      : ${jidReal}`)
-    console.log(`🔢  Número completo: ${numeroCompleto}`)
-    console.log(`🔢  Número local   : ${numeroLocal}`)
-    console.log(`🌍  País detectado : ${pais} (${codigoPais})`)
-    console.log(`👤  Nombre push    : ${msg.pushName ?? "Sin nombre"}`)
-    console.log(`💬  Texto          : ${texto}`)
-    console.log(`📝  Estado/About   : ${estado}`)
-    console.log(`🖼️   Foto perfil    : ${fotoPerfil}`)
-    console.log(`🆔  Message ID     : ${msg.key?.id ?? "N/A"}`)
-    console.log(`📅  Timestamp      : ${timestamp}`)
-    console.log(`📦  Tipo mensaje   : ${tipoMensaje}`)
-    console.log(`${"─".repeat(65)}`)
-    console.log(`🧩  MSG RAW COMPLETO:`)
-    console.log(JSON.stringify(msg, null, 2))
-    console.log(`${"═".repeat(65)}\n`)
-  } catch (err) {
-    console.error(`❌ [Bot ${dispositivoId}] Error en logContacto:`, err)
-  }
+/* Una línea por mensaje recibido. Sin volcar el mensaje completo ni consultar
+   foto/estado del contacto (datos privados y consultas extra a WhatsApp en cada mensaje). */
+function logContacto(msg: any, jidReal: string, dispositivoId: number) {
+  const { numeroCompleto } = detectarPais(jidReal)
+  const texto: string = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? ""
+  console.log(`📩 [Bot ${dispositivoId}] ${numeroCompleto}${msg.pushName ? ` (${msg.pushName})` : ""}: "${texto.slice(0, 80)}${texto.length > 80 ? "…" : ""}"`)
 }
 
 /* ═══════════════════════════════════════════
@@ -538,28 +499,38 @@ async function sincronizarCuentaBot(
 ═══════════════════════════════════════════ */
 export async function conectarDispositivo(dispositivoId: number): Promise<void> {
   const existing = dispositivos.get(dispositivoId)
-  if (existing?.sock) return
+  // Ya conectado o conectándose: dos sockets con la misma sesión se expulsan entre sí
+  if (existing?.sock || conectando.has(dispositivoId)) return
+  conectando.add(dispositivoId)
 
   const entry: InfoDispositivo = existing ?? {
     id: dispositivoId, estado: "esperando_qr", qr: null, telefono: null, sock: null,
   }
-  entry.estado = "esperando_qr"
-  entry.qr = null
-  dispositivos.set(dispositivoId, entry)
+  let sock: WASocket
+  let saveCreds: () => Promise<void>
+  let usuarioId: number
+  try {
+    entry.estado = "esperando_qr"
+    entry.qr = null
+    dispositivos.set(dispositivoId, entry)
 
-  const devDb = await prisma.dispositivo.findUnique({ where: { id: dispositivoId } })
-  if (!devDb) return
-  const usuarioId = devDb.usuarioId
+    const devDb = await prisma.dispositivo.findUnique({ where: { id: dispositivoId } })
+    if (!devDb) return
+    usuarioId = devDb.usuarioId
 
-  const { state, saveCreds } = await useMultiFileAuthState(carpetaSesion(dispositivoId))
-  const { version } = await fetchLatestBaileysVersion()
+    const auth = await useMultiFileAuthState(carpetaSesion(dispositivoId))
+    saveCreds = auth.saveCreds
+    const { version } = await fetchLatestBaileysVersion()
 
-  const sock = makeWASocket({
-    auth: state, printQRInTerminal: false,
-    logger: pino({ level: "silent" }), version, connectTimeoutMs: 60000,
-    markOnlineOnConnect: false,
-  })
-  entry.sock = sock
+    sock = makeWASocket({
+      auth: auth.state, printQRInTerminal: false,
+      logger: pino({ level: "silent" }), version, connectTimeoutMs: 60000,
+      markOnlineOnConnect: false,
+    })
+    entry.sock = sock
+  } finally {
+    conectando.delete(dispositivoId)
+  }
   sock.ev.on("creds.update", saveCreds)
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
@@ -642,7 +613,7 @@ export async function conectarDispositivo(dispositivoId: number): Promise<void> 
               console.log(`📥 [Bot ${dispositivoId}] servicioId Puppeteer: ${srvMastv?.id ?? "null"}`)
 
               const datos = await buscarUsuarioIPTV(nuevoUsuario, usuarioId)
-              console.log(`📥 [Bot ${dispositivoId}] datos del panel: usuario="${datos.usuario}" pass="${datos.password}" expira="${datos.expira}" plan="${datos.paquete}"`)
+              console.log(`📥 [Bot ${dispositivoId}] datos del panel: usuario="${datos.usuario}" expira="${datos.expira}" plan="${datos.paquete}"`)
 
               let expiraEn: Date | null = null
               if (datos.expira) {
@@ -1033,7 +1004,7 @@ export async function conectarDispositivo(dispositivoId: number): Promise<void> 
 
       // ── Mensaje entrante del cliente ─────────────────────────────────────
       if (!texto) continue
-      await logContacto(msg, sock, dispositivoId)
+      logContacto(msg, jidReal, dispositivoId)
       try { await manejarMensaje(jidReal, texto, dispositivoId, usuarioId, sock) }
       catch (err) { console.error(`❌ [Bot ${dispositivoId}]:`, err) }
     }

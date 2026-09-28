@@ -21,9 +21,10 @@ export function adminOnly(req: any, res: any, next: any) {
 export async function checkExpiracion(req: any, res: any, next: any) {
   if (req.usuario?.rol === "admin") return next()
   const usuario = await prisma.usuario.findUnique({ where: { id: req.usuario.id } })
-  if (!usuario?.activo) return res.status(403).json({ error: "Cuenta desactivada" })
+  // 401 = la sesión ya no vale (el frontend cierra sesión). 403 queda solo para "sin permiso" (no cierra sesión).
+  if (!usuario?.activo) return res.status(401).json({ error: "Cuenta desactivada" })
   if (usuario.expiraEn && new Date() > usuario.expiraEn)
-    return res.status(403).json({ error: "Cuenta expirada. Contacta al administrador." })
+    return res.status(401).json({ error: "Cuenta expirada. Contacta al administrador." })
   next()
 }
 
